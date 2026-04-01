@@ -132,10 +132,13 @@ class OfflineTtsZipvoiceImpl : public OfflineTtsImpl {
       return {};
     }
 
-    std::vector<TokenIDs> prompt_token_ids =
-        frontend_->ConvertTextToTokenIds(config.reference_text);
-    if (prompt_token_ids.empty() ||
-        (prompt_token_ids.size() == 1 && prompt_token_ids[0].tokens.empty())) {
+    // 检查是否已经缓存了音色特征
+    if (cached_prompt_tokens_.empty() || cached_prompt_features_.empty()) {
+      // 第一次调用，计算并缓存音色特征
+      std::vector<TokenIDs> prompt_token_ids =
+          frontend_->ConvertTextToTokenIds(config.reference_text);
+      if (prompt_token_ids.empty() ||
+          (prompt_token_ids.size() == 1 && prompt_token_ids[0].tokens.empty())) {
 #if __OHOS__
       SHERPA_ONNX_LOGE(
           "Failed to convert prompt text '%{public}s' to token IDs",
@@ -147,18 +150,30 @@ class OfflineTtsZipvoiceImpl : public OfflineTtsImpl {
       return {};
     }
 
-    std::vector<int64_t> prompt_tokens;
-    for (const auto &t : prompt_token_ids) {
-      prompt_tokens.insert(prompt_tokens.end(), t.tokens.begin(),
-                           t.tokens.end());
-    }
+      for (const auto &t : prompt_token_ids) {
+        cached_prompt_tokens_.insert(cached_prompt_tokens_.end(), 
+                                     t.tokens.begin(), t.tokens.end());
+      }
 
-    std::vector<float> prompt_features = ComputePromptFeatures(
-        config.reference_audio, config.reference_sample_rate, feat_scale,
-        target_rms);
-    if (prompt_features.empty()) {
-      SHERPA_ONNX_LOGE("No frames extracted from the prompt audio");
-      return {};
+      cached_prompt_features_ = ComputePromptFeatures(
+          config.reference_audio, config.reference_sample_rate, feat_scale,
+          target_rms);
+      if (cached_prompt_features_.empty()) {
+        SHERPA_ONNX_LOGE("No frames extracted from the prompt audio");
+        return {};
+      }
+
+      cached_feat_scale_ = feat_scale;
+      cached_target_rms_ = target_rms;
+      
+      if (config_.model.debug) {
+        SHERPA_ONNX_LOGE("Cached voice features for first-time use");
+      }
+    } else {
+      // 使用缓存的音色特征
+      if (config_.model.debug) {
+        SHERPA_ONNX_LOGE("Using cached voice features");
+      }
     }
 
     auto sentences = SplitByPunctuation(text);
@@ -213,8 +228,8 @@ class OfflineTtsZipvoiceImpl : public OfflineTtsImpl {
       }
 
       GeneratedAudio cur = GenerateChunk(
-          sentences[i], prompt_tokens, prompt_features, speed, num_steps,
-          feat_scale, t_shift, guidance_scale);
+          sentences[i], cached_prompt_tokens_, cached_prompt_features_, 
+          speed, num_steps, cached_feat_scale_, t_shift, guidance_scale);
 
       if (cur.samples.empty()) {
         continue;
@@ -482,8 +497,13 @@ class OfflineTtsZipvoiceImpl : public OfflineTtsImpl {
   std::unique_ptr<OfflineTtsZipvoiceModel> model_;
   std::unique_ptr<Vocoder> vocoder_;
   std::unique_ptr<OfflineTtsFrontend> frontend_;
-
   std::unique_ptr<knf::MelBanks> mel_banks_;
+
+  // 缓存的音色特征
+  mutable std::vector<int64_t> cached_prompt_tokens_;
+  mutable std::vector<float> cached_prompt_features_;
+  mutable float cached_feat_scale_ = 0.0f;
+  mutable float cached_target_rms_ = 0.0f;
 };
 
 }  // namespace sherpa_onnx
