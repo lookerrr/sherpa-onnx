@@ -25,6 +25,10 @@
 #include "sherpa-onnx/csrc/resample.h"
 #include "sherpa-onnx/csrc/text-utils.h"
 #include "sherpa-onnx/csrc/vocoder.h"
+// 在已有 include 区域添加
+#include "fst/extensions/far/far.h"
+#include "kaldifst/csrc/kaldi-fst-io.h"
+#include "kaldifst/csrc/text-normalizer.h"
 
 namespace sherpa_onnx {
 
@@ -35,7 +39,47 @@ class OfflineTtsZipvoiceImpl : public OfflineTtsImpl {
         model_(std::make_unique<OfflineTtsZipvoiceModel>(config.model)),
         vocoder_(Vocoder::Create(config.model)) {
     InitFrontend();
+    // ========== 新增：加载文本归一化 FST 规则 ==========
+    if (!config.rule_fsts.empty()) {
+      std::vector<std::string> files;
+      SplitStringToVector(config.rule_fsts, ",", false, &files);
+      tn_list_.reserve(files.size());
+      for (const auto &f : files) {
+        if (config_.model.debug) {
+          SHERPA_ONNX_LOGE("rule fst: %s", f.c_str());
+        }
+        tn_list_.push_back(std::make_unique<kaldifst::TextNormalizer>(f));
+      }
+    }
 
+    if (!config.rule_fars.empty()) {
+      if (config_.model.debug) {
+        SHERPA_ONNX_LOGE("Loading FST archives");
+      }
+      std::vector<std::string> files;
+      SplitStringToVector(config.rule_fars, ",", false, &files);
+
+      tn_list_.reserve(files.size() + tn_list_.size());
+
+      for (const auto &f : files) {
+        if (config_.model.debug) {
+          SHERPA_ONNX_LOGE("rule far: %s", f.c_str());
+        }
+        std::unique_ptr<fst::FarReader<fst::StdArc>> reader(
+            fst::FarReader<fst::StdArc>::Open(f));
+        for (; !reader->Done(); reader->Next()) {
+          std::unique_ptr<fst::StdConstFst> r(
+              fst::CastOrConvertToConstFst(reader->GetFst()->Copy()));
+          tn_list_.push_back(
+              std::make_unique<kaldifst::TextNormalizer>(std::move(r)));
+        }
+      }
+
+      if (config_.model.debug) {
+        SHERPA_ONNX_LOGE("FST archives loaded!");
+      }
+    }
+    // ========== 新增结束 ==========
     PostInit();
   }
 
@@ -45,7 +89,44 @@ class OfflineTtsZipvoiceImpl : public OfflineTtsImpl {
         model_(std::make_unique<OfflineTtsZipvoiceModel>(mgr, config.model)),
         vocoder_(Vocoder::Create(mgr, config.model)) {
     InitFrontend(mgr);
+    // ========== 新增：加载文本归一化 FST 规则（从 asset manager）==========
+    if (!config.rule_fsts.empty()) {
+      std::vector<std::string> files;
+      SplitStringToVector(config.rule_fsts, ",", false, &files);
+      tn_list_.reserve(files.size());
+      for (const auto &f : files) {
+        if (config_.model.debug) {
+          SHERPA_ONNX_LOGE("rule fst: %s", f.c_str());
+        }
+        auto buf = ReadFile(mgr, f);
+        std::istringstream is(std::string(buf.data(), buf.size()));
+        tn_list_.push_back(std::make_unique<kaldifst::TextNormalizer>(is));
+      }
+    }
 
+    if (!config.rule_fars.empty()) {
+      std::vector<std::string> files;
+      SplitStringToVector(config.rule_fars, ",", false, &files);
+      tn_list_.reserve(files.size() + tn_list_.size());
+
+      for (const auto &f : files) {
+        if (config_.model.debug) {
+          SHERPA_ONNX_LOGE("rule far: %s", f.c_str());
+        }
+        auto buf = ReadFile(mgr, f);
+        std::unique_ptr<std::istream> s(
+            new std::istringstream(std::string(buf.data(), buf.size())));
+        std::unique_ptr<fst::FarReader<fst::StdArc>> reader(
+            fst::FarReader<fst::StdArc>::Open(std::move(s)));
+        for (; !reader->Done(); reader->Next()) {
+          std::unique_ptr<fst::StdConstFst> r(
+              fst::CastOrConvertToConstFst(reader->GetFst()->Copy()));
+          tn_list_.push_back(
+              std::make_unique<kaldifst::TextNormalizer>(std::move(r)));
+        }
+      }
+    }
+    // ========== 新增结束 ==========
     PostInit();
   }
 
@@ -132,6 +213,18 @@ class OfflineTtsZipvoiceImpl : public OfflineTtsImpl {
       return {};
     }
 
+    // ========== 文本归一化 ==========
+    std::string normalized_text = text;
+    if (!tn_list_.empty()) {
+      for (const auto &tn : tn_list_) {
+        normalized_text = tn->Normalize(normalized_text);
+      }
+      if (config_.model.debug) {
+        SHERPA_ONNX_LOGE("Before: %s", text.c_str());
+        SHERPA_ONNX_LOGE("After:  %s", normalized_text.c_str());
+      }
+    }
+    // ================================
     // 检查是否已经缓存了音色特征
     if (cached_prompt_tokens_.empty() || cached_prompt_features_.empty()) {
       // 第一次调用，计算并缓存音色特征
@@ -176,7 +269,7 @@ class OfflineTtsZipvoiceImpl : public OfflineTtsImpl {
       }
     }
 
-    auto sentences = SplitByPunctuation(text);
+    auto sentences = SplitByPunctuation(normalized_text);
     if (sentences.empty()) {
       return {};
     }
@@ -498,6 +591,7 @@ class OfflineTtsZipvoiceImpl : public OfflineTtsImpl {
   std::unique_ptr<Vocoder> vocoder_;
   std::unique_ptr<OfflineTtsFrontend> frontend_;
   std::unique_ptr<knf::MelBanks> mel_banks_;
+  std::vector<std::unique_ptr<kaldifst::TextNormalizer>> tn_list_;
 
   // 缓存的音色特征
   mutable std::vector<int64_t> cached_prompt_tokens_;
