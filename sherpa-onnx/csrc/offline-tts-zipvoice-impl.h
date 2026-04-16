@@ -155,19 +155,28 @@ class OfflineTtsZipvoiceImpl : public OfflineTtsImpl {
       SHERPA_ONNX_LOGE("%s", config.ToString().c_str());
     }
 
-    if (config.reference_sample_rate <= 0) {
+    // ====================== 新增：按语言选择参考音频/文本缓存 ======================
+    bool use_en = (config.language == "en");
+    std::cout << "language:" << config.language << std::endl;
+    // =========================================================================
+
+    if ((use_en ? config.reference_sample_rate_en : config.reference_sample_rate) <=
+        0) {
       SHERPA_ONNX_LOGE("reference_sample_rate %d is invalid.",
-                       config.reference_sample_rate);
+                       use_en ? config.reference_sample_rate_en
+                              : config.reference_sample_rate);
       return {};
     }
 
-    if (config.reference_audio.empty()) {
-      SHERPA_ONNX_LOGE("reference_audio is empty.");
+    if (use_en ? config.reference_audio_en.empty() : config.reference_audio.empty()) {
+      SHERPA_ONNX_LOGE("%s is empty.",
+                       use_en ? "reference_audio_en" : "reference_audio");
       return {};
     }
 
-    if (config.reference_text.empty()) {
-      SHERPA_ONNX_LOGE("reference_text is empty.");
+    if (use_en ? config.reference_text_en.empty() : config.reference_text.empty()) {
+      SHERPA_ONNX_LOGE("%s is empty.",
+                       use_en ? "reference_text_en" : "reference_text");
       return {};
     }
 
@@ -225,47 +234,84 @@ class OfflineTtsZipvoiceImpl : public OfflineTtsImpl {
       }
     }
     // ================================
-    // 检查是否已经缓存了音色特征
-    if (cached_prompt_tokens_.empty() || cached_prompt_features_.empty()) {
-      // 第一次调用，计算并缓存音色特征
+
+    // ========== 新增：根据 language 选择对应缓存容器 ==========
+    const std::vector<int64_t> &cached_tokens =
+        use_en ? cached_prompt_tokens_en_ : cached_prompt_tokens_;
+    const std::vector<float> &cached_features =
+        use_en ? cached_prompt_features_en_ : cached_prompt_features_;
+    float cached_feat_scale = use_en ? cached_feat_scale_en_ : cached_feat_scale_;
+    float cached_target_rms = use_en ? cached_target_rms_en_ : cached_target_rms_;
+    // ============================================================
+
+    // 检查是否已经缓存了音色特征（按语言分别缓存）
+    if ((use_en ? cached_prompt_tokens_en_.empty() : cached_prompt_tokens_.empty()) ||
+        (use_en ? cached_prompt_features_en_.empty() : cached_prompt_features_.empty())) {
+      // 第一次调用/该语言未缓存：计算并缓存音色特征
       std::vector<TokenIDs> prompt_token_ids =
-          frontend_->ConvertTextToTokenIds(config.reference_text);
+          frontend_->ConvertTextToTokenIds(use_en ? config.reference_text_en
+                                                  : config.reference_text);
       if (prompt_token_ids.empty() ||
           (prompt_token_ids.size() == 1 && prompt_token_ids[0].tokens.empty())) {
 #if __OHOS__
       SHERPA_ONNX_LOGE(
           "Failed to convert prompt text '%{public}s' to token IDs",
-          config.reference_text.c_str());
+          (use_en ? config.reference_text_en : config.reference_text).c_str());
 #else
       SHERPA_ONNX_LOGE("Failed to convert prompt text '%s' to token IDs",
-                       config.reference_text.c_str());
+                       (use_en ? config.reference_text_en : config.reference_text).c_str());
 #endif
       return {};
     }
 
-      for (const auto &t : prompt_token_ids) {
-        cached_prompt_tokens_.insert(cached_prompt_tokens_.end(), 
-                                     t.tokens.begin(), t.tokens.end());
-      }
+      if (use_en) {
+        for (const auto &t : prompt_token_ids) {
+          cached_prompt_tokens_en_.insert(cached_prompt_tokens_en_.end(),
+                                           t.tokens.begin(),
+                                           t.tokens.end());
+        }
 
-      cached_prompt_features_ = ComputePromptFeatures(
-          config.reference_audio, config.reference_sample_rate, feat_scale,
-          target_rms);
-      if (cached_prompt_features_.empty()) {
-        SHERPA_ONNX_LOGE("No frames extracted from the prompt audio");
-        return {};
-      }
+        cached_prompt_features_en_ = ComputePromptFeatures(
+            config.reference_audio_en, config.reference_sample_rate_en, feat_scale,
+            target_rms);
+        if (cached_prompt_features_en_.empty()) {
+          SHERPA_ONNX_LOGE("No frames extracted from the prompt audio");
+          return {};
+        }
 
-      cached_feat_scale_ = feat_scale;
-      cached_target_rms_ = target_rms;
-      
-      if (config_.model.debug) {
-        SHERPA_ONNX_LOGE("Cached voice features for first-time use");
+        cached_feat_scale_en_ = feat_scale;
+        cached_target_rms_en_ = target_rms;
+
+        if (config_.model.debug) {
+          SHERPA_ONNX_LOGE("Cached voice features for first-time use (en)");
+        }
+      } else {
+        for (const auto &t : prompt_token_ids) {
+          cached_prompt_tokens_.insert(cached_prompt_tokens_.end(),
+                                         t.tokens.begin(),
+                                         t.tokens.end());
+        }
+
+        cached_prompt_features_ = ComputePromptFeatures(
+            config.reference_audio, config.reference_sample_rate, feat_scale,
+            target_rms);
+        if (cached_prompt_features_.empty()) {
+          SHERPA_ONNX_LOGE("No frames extracted from the prompt audio");
+          return {};
+        }
+
+        cached_feat_scale_ = feat_scale;
+        cached_target_rms_ = target_rms;
+
+        if (config_.model.debug) {
+          SHERPA_ONNX_LOGE("Cached voice features for first-time use (zh)");
+        }
       }
     } else {
       // 使用缓存的音色特征
       if (config_.model.debug) {
-        SHERPA_ONNX_LOGE("Using cached voice features");
+        SHERPA_ONNX_LOGE("Using cached voice features (%s)",
+                         use_en ? "en" : "zh");
       }
     }
 
@@ -321,8 +367,10 @@ class OfflineTtsZipvoiceImpl : public OfflineTtsImpl {
       }
 
       GeneratedAudio cur = GenerateChunk(
-          sentences[i], cached_prompt_tokens_, cached_prompt_features_, 
-          speed, num_steps, cached_feat_scale_, t_shift, guidance_scale);
+          sentences[i], use_en ? cached_prompt_tokens_en_ : cached_prompt_tokens_,
+          use_en ? cached_prompt_features_en_ : cached_prompt_features_,
+          speed, num_steps, use_en ? cached_feat_scale_en_ : cached_feat_scale_,
+          t_shift, guidance_scale);
 
       if (cur.samples.empty()) {
         continue;
@@ -593,11 +641,17 @@ class OfflineTtsZipvoiceImpl : public OfflineTtsImpl {
   std::unique_ptr<knf::MelBanks> mel_banks_;
   std::vector<std::unique_ptr<kaldifst::TextNormalizer>> tn_list_;
 
-  // 缓存的音色特征
+  // 缓存的音色特征（中文）
   mutable std::vector<int64_t> cached_prompt_tokens_;
   mutable std::vector<float> cached_prompt_features_;
   mutable float cached_feat_scale_ = 0.0f;
   mutable float cached_target_rms_ = 0.0f;
+
+  // 缓存的音色特征（英文）
+  mutable std::vector<int64_t> cached_prompt_tokens_en_;
+  mutable std::vector<float> cached_prompt_features_en_;
+  mutable float cached_feat_scale_en_ = 0.0f;
+  mutable float cached_target_rms_en_ = 0.0f;
 };
 
 }  // namespace sherpa_onnx

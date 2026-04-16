@@ -607,6 +607,11 @@ GeneratedAudio OfflineTts::Generate(const std::string &text,
   c.reference_audio_len = config.reference_audio.size();
   c.reference_sample_rate = config.reference_sample_rate;
   c.reference_text = config.reference_text.c_str();
+  c.reference_audio_en = config.reference_audio_en.data();
+  c.reference_audio_len_en = config.reference_audio_en.size();
+  c.reference_sample_rate_en = config.reference_sample_rate_en;
+  c.reference_text_en = config.reference_text_en.c_str();
+  c.language = config.language.c_str();
   c.num_steps = config.num_steps;
 
   nlohmann::json j = config.extra;

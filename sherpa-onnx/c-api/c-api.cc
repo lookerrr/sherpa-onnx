@@ -1616,7 +1616,17 @@ static const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateInternal(
         config->reference_audio,
         config->reference_audio + config->reference_audio_len);
   }
+  if (config->reference_audio_en) {
+    if (config->reference_audio_len_en <= 0) {
+      SHERPA_ONNX_LOGE("Invalid reference audio len: %d",
+                       config->reference_audio_len_en);
+      return nullptr;
+    }
 
+    cfg.reference_audio_en.assign(
+        config->reference_audio_en,
+        config->reference_audio_en + config->reference_audio_len_en);
+  }
   cfg.silence_scale = SHERPA_ONNX_OR(config->silence_scale, 0.2);
   cfg.speed = SHERPA_ONNX_OR(config->speed, 1.0);
   cfg.sid = config->sid;
@@ -1624,6 +1634,11 @@ static const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateInternal(
   cfg.reference_sample_rate = config->reference_sample_rate;
 
   cfg.reference_text = SHERPA_ONNX_OR(config->reference_text, "");
+
+  cfg.reference_sample_rate_en = config->reference_sample_rate_en;
+  cfg.reference_text_en = SHERPA_ONNX_OR(config->reference_text_en, "");
+  cfg.language = SHERPA_ONNX_OR(config->language, "");
+
   cfg.num_steps = SHERPA_ONNX_OR(config->num_steps, 5);
 
   if (config->extra && !std::string(config->extra).empty()) {

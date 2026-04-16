@@ -2671,6 +2671,16 @@ typedef struct SherpaOnnxGenerationConfig {
   int32_t reference_sample_rate;
   /** Optional reference text associated with @c reference_audio. */
   const char *reference_text;
+  /** Optional reference audio for zero-shot or voice-cloning models. */
+  const float *reference_audio_en;
+  /** Length of @c reference_audio in samples. */
+  int32_t reference_audio_len_en;
+  /** Sample rate of @c reference_audio. */
+  int32_t reference_sample_rate_en;
+  /** Optional reference text associated with @c reference_audio. */
+  const char *reference_text_en;
+
+  const char *language;
   /** Optional number of flow-matching steps. */
   int32_t num_steps;
   /** Optional model-specific JSON string with extra key/value pairs. */

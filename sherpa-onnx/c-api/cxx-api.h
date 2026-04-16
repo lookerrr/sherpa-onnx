@@ -1007,6 +1007,10 @@ struct GenerationConfig {
   int32_t reference_sample_rate = 0;
   /** Optional reference text. Not all models require it. */
   std::string reference_text;
+  std::vector<float> reference_audio_en;  // mono, [-1, 1]
+  int32_t reference_sample_rate_en = 0;   // sample rate of reference_audio_en
+  std::string reference_text_en;          // not all models require this
+  std::string language = "zh";  // e.g., "zh" or "en". Used only by some models.
   /** Number of flow-matching steps when supported. */
   int32_t num_steps = 5;
 
